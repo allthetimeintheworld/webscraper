@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NewsAPI Dashboard Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #1976d2;
+        }
+        .search-section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .search-box {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .search-input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        .search-btn {
+            padding: 10px 20px;
+            background: #1976d2;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .search-btn:hover {
+            background: #1565c0;
+        }
+        .search-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .results {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .article {
+            border-bottom: 1px solid #eee;
+            padding: 15px 0;
+        }
+        .article:last-child {
+            border-bottom: none;
+        }
+        .article-title {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #333;
+        }
+        .article-description {
+            color: #666;
+            margin-bottom: 8px;
+        }
+        .article-meta {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .tag {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+        }
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        .stats {
+            background: #e8f5e8;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            font-weight: bold;
+            color: #2e7d32;
+        }
+    </style>
+</head>
+<body>
+    <h1 class="header">🗞️ NewsAPI Dashboard Demo</h1>
+    
+    <div class="search-section">
+        <h3>Live News Search</h3>
+        <div class="search-box">
+            <input type="text" id="searchQuery" class="search-input" placeholder="Enter search query (e.g., trump, biden, election)" value="trump">
+            <button id="searchBtn" class="search-btn">Search News</button>
+        </div>
+        <p>Search for real-time news articles using NewsAPI integration</p>
+    </div>
+
+    <div id="results" class="results" style="display: none;">
+        <div id="stats" class="stats"></div>
+        <div id="articles"></div>
+    </div>
+
+    <div id="loading" class="loading" style="display: none;">
+        <p>🔍 Searching for news articles...</p>
+    </div>
+
+    <div id="error" class="error" style="display: none;"></div>
+
+    <script>
+        const searchBtn = document.getElementById('searchBtn');
+        const searchQuery = document.getElementById('searchQuery');
+        const resultsDiv = document.getElementById('results');
+        const articlesDiv = document.getElementById('articles');
+        const statsDiv = document.getElementById('stats');
+        const loadingDiv = document.getElementById('loading');
+        const errorDiv = document.getElementById('error');
+
+        async function searchNews() {
+            const query = searchQuery.value.trim();
+            if (!query) return;
+
+            // Show loading
+            loadingDiv.style.display = 'block';
+            resultsDiv.style.display = 'none';
+            errorDiv.style.display = 'none';
+            searchBtn.disabled = true;
+            searchBtn.textContent = 'Searching...';
+
+            try {
+                // Create NewsAPI job
+                const response = await fetch(`http://localhost:8000/api/jobs/newsapi?query=${encodeURIComponent(query)}&from_date=2025-07-15`, {
+                    method: 'POST',
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const jobData = await response.json();
+
+                // Get results
+                const resultsResponse = await fetch(`http://localhost:8000/api/jobs/newsapi/results/${jobData.job_id}`);
+                if (!resultsResponse.ok) {
+                    throw new Error('Failed to get results');
+                }
+
+                const newsResults = await resultsResponse.json();
+                displayResults(newsResults);
+
+            } catch (err) {
+                errorDiv.textContent = `Error: ${err.message}`;
+                errorDiv.style.display = 'block';
+            } finally {
+                loadingDiv.style.display = 'none';
+                searchBtn.disabled = false;
+                searchBtn.textContent = 'Search News';
+            }
+        }
+
+        function displayResults(results) {
+            statsDiv.textContent = `📰 Found ${results.articles_count} articles (${results.total_results} total available)`;
+            
+            articlesDiv.innerHTML = '';
+            results.articles.slice(0, 10).forEach(article => {
+                const articleDiv = document.createElement('div');
+                articleDiv.className = 'article';
+                
+                articleDiv.innerHTML = `
+                    <div class="article-title">${article.title}</div>
+                    <div class="article-description">${article.description || 'No description available'}</div>
+                    <div class="article-meta">
+                        <span class="tag">📰 ${article.source.name}</span>
+                        <span class="tag">📅 ${new Date(article.publishedAt).toLocaleDateString()}</span>
+                        ${article.author ? `<span class="tag">✍️ ${article.author}</span>` : ''}
+                        <a href="${article.url}" target="_blank" style="color: #1976d2; text-decoration: none;">🔗 Read Article</a>
+                    </div>
+                `;
+                
+                articlesDiv.appendChild(articleDiv);
+            });
+
+            resultsDiv.style.display = 'block';
+        }
+
+        // Event listeners
+        searchBtn.addEventListener('click', searchNews);
+        searchQuery.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                searchNews();
+            }
+        });
+
+        // Auto-load Trump news on page load
+        window.addEventListener('load', () => {
+            setTimeout(searchNews, 1000);
+        });
+    </script>
+</body>
+</html>
