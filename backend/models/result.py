@@ -14,7 +14,7 @@ class Result(Base):
     # Extracted data
     title = Column(String(1024), nullable=True)
     content = Column(JSON, nullable=False)  # Main extracted data
-    metadata = Column(JSON, nullable=True)  # Additional metadata
+    result_metadata = Column(JSON, nullable=True)  # Additional metadata
     
     # Data quality metrics
     data_quality_score = Column(Float, nullable=True)

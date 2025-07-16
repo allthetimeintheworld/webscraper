@@ -4,23 +4,33 @@ from typing import List, Optional
 from config.database import get_db
 from pydantic import BaseModel
 from datetime import datetime
+from core.scraper.job_executor import job_executor, JobStatus
 
 router = APIRouter()
+
+# Simple in-memory storage for jobs (in production, use database)
+jobs_storage = {}
+job_id_counter = 1
 
 # Pydantic models for request/response
 class JobCreate(BaseModel):
     name: str
-    target_urls: List[str]
+    description: Optional[str] = None
+    urls: List[str]
     scraping_rules: dict
+    settings: dict
     schedule: Optional[str] = None
     priority: int = 1
 
 class JobResponse(BaseModel):
     id: int
     name: str
+    description: Optional[str] = None
     status: str
     created_at: datetime
-    target_urls: List[str]
+    urls: List[str]
+    scraping_rules: dict
+    settings: dict
     progress: float
     pages_scraped: int
     
@@ -30,56 +40,169 @@ class JobResponse(BaseModel):
 @router.get("/", response_model=List[JobResponse])
 async def get_jobs(db: AsyncSession = Depends(get_db)):
     """Get all scraping jobs"""
-    # Placeholder implementation
-    return [
-        JobResponse(
-            id=1,
+    # Return jobs from storage plus some sample data
+    result = []
+    
+    # Add stored jobs
+    for job_data in jobs_storage.values():
+        result.append(JobResponse(**job_data))
+    
+    # Add sample data if no jobs exist
+    if not result:
+        result.append(JobResponse(
+            id=0,
             name="Sample Job",
-            status="running",
+            description="A sample scraping job",
+            status="completed",
             created_at=datetime.now(),
-            target_urls=["https://example.com"],
-            progress=45.5,
+            urls=["https://example.com"],
+            scraping_rules={"title": {"selector": "h1", "attribute": "text"}},
+            settings={"delay": 2, "useJavaScript": False},
+            progress=100.0,
             pages_scraped=123
-        )
-    ]
+        ))
+    
+    return result
 
 @router.post("/", response_model=JobResponse)
 async def create_job(job: JobCreate, db: AsyncSession = Depends(get_db)):
     """Create a new scraping job"""
-    # Placeholder implementation
-    return JobResponse(
-        id=2,
-        name=job.name,
-        status="created",
-        created_at=datetime.now(),
-        target_urls=job.target_urls,
-        progress=0.0,
-        pages_scraped=0
-    )
+    global job_id_counter
+    
+    # Store the job in memory
+    job_id = job_id_counter
+    job_id_counter += 1
+    
+    job_data = {
+        "id": job_id,
+        "name": job.name,
+        "description": job.description,
+        "status": "created",
+        "created_at": datetime.now(),
+        "urls": job.urls,
+        "scraping_rules": job.scraping_rules,
+        "settings": job.settings,
+        "progress": 0.0,
+        "pages_scraped": 0
+    }
+    
+    jobs_storage[job_id] = job_data
+    
+    return JobResponse(**job_data)
 
 @router.get("/{job_id}", response_model=JobResponse)
 async def get_job(job_id: int, db: AsyncSession = Depends(get_db)):
     """Get a specific job by ID"""
-    # Placeholder implementation
-    return JobResponse(
-        id=job_id,
-        name="Sample Job",
-        status="running",
-        created_at=datetime.now(),
-        target_urls=["https://example.com"],
-        progress=45.5,
-        pages_scraped=123
-    )
+    if job_id in jobs_storage:
+        return JobResponse(**jobs_storage[job_id])
+    else:
+        # Return sample data for non-existent jobs
+        return JobResponse(
+            id=job_id,
+            name="Sample Job",
+            description="A sample scraping job",
+            status="running",
+            created_at=datetime.now(),
+            urls=["https://example.com"],
+            scraping_rules={"title": {"selector": "h1", "attribute": "text"}},
+            settings={"delay": 2, "useJavaScript": False},
+            progress=45.5,
+            pages_scraped=123
+        )
 
 @router.post("/{job_id}/start")
 async def start_job(job_id: int, db: AsyncSession = Depends(get_db)):
     """Start a scraping job"""
-    return {"message": f"Job {job_id} started"}
+    try:
+        # Get the job configuration from storage
+        if job_id not in jobs_storage:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        
+        job_data = jobs_storage[job_id]
+        
+        # Use the actual job configuration
+        job_config = {
+            "name": job_data["name"],
+            "urls": job_data["urls"],
+            "scraping_rules": job_data["scraping_rules"],
+            "settings": job_data["settings"]
+        }
+        
+        success = await job_executor.start_job(job_id, job_config)
+        
+        if success:
+            # Update job status in storage
+            jobs_storage[job_id]["status"] = "running"
+            return {"message": f"Job {job_id} started successfully", "status": "running"}
+        else:
+            return {"message": f"Job {job_id} is already running", "status": "already_running"}
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start job: {str(e)}")
 
 @router.post("/{job_id}/stop")
 async def stop_job(job_id: int, db: AsyncSession = Depends(get_db)):
     """Stop a scraping job"""
-    return {"message": f"Job {job_id} stopped"}
+    try:
+        success = await job_executor.stop_job(job_id)
+        
+        if success:
+            # Update job status in storage if it exists
+            if job_id in jobs_storage:
+                jobs_storage[job_id]["status"] = "paused"
+            return {"message": f"Job {job_id} stopped successfully", "status": "stopped"}
+        else:
+            return {"message": f"Job {job_id} is not running", "status": "not_running"}
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to stop job: {str(e)}")
+
+@router.get("/{job_id}/status")
+async def get_job_status(job_id: int, db: AsyncSession = Depends(get_db)):
+    """Get the current status and progress of a job"""
+    try:
+        status = job_executor.get_job_status(job_id)
+        progress = job_executor.get_job_progress(job_id)
+        
+        if status is None:
+            return {"status": "not_found", "message": f"Job {job_id} not found"}
+        
+        return {
+            "job_id": job_id,
+            "status": status.value,
+            "progress": progress
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get job status: {str(e)}")
+
+@router.get("/{job_id}/results")
+async def get_job_results(job_id: int, db: AsyncSession = Depends(get_db)):
+    """Get the results of a completed or running job"""
+    try:
+        progress = job_executor.get_job_progress(job_id)
+        
+        if progress is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        
+        results = progress.get("results", [])
+        
+        return {
+            "job_id": job_id,
+            "total_results": len(results),
+            "results": [
+                {
+                    "url": result.url,
+                    "data": result.data,
+                    "success": result.success,
+                    "error": result.error,
+                    "timestamp": result.timestamp
+                } for result in results
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get job results: {str(e)}")
 
 @router.delete("/{job_id}")
 async def delete_job(job_id: int, db: AsyncSession = Depends(get_db)):
