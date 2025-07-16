@@ -5,6 +5,7 @@ from config.database import get_db
 from pydantic import BaseModel
 from datetime import datetime
 from core.scraper.job_executor import job_executor, JobStatus
+import aiohttp
 
 router = APIRouter()
 
@@ -224,3 +225,76 @@ async def get_job_progress(job_id: int):
 async def delete_job(job_id: int, db: AsyncSession = Depends(get_db)):
     """Delete a scraping job"""
     return {"message": f"Job {job_id} deleted"}
+
+@router.post("/newsapi")
+async def create_newsapi_job(
+    query: str = "trump",
+    from_date: str = "2025-07-01",
+    sort_by: str = "publishedAt",
+    api_key: str = "b430f395965341fda13646efedff85a7"
+):
+    """Create a NewsAPI job with server-side API calls to avoid CORS"""
+    
+    # Make the NewsAPI request server-side
+    newsapi_url = f"https://newsapi.org/v2/everything?q={query}&from={from_date}&sortBy={sort_by}&apiKey={api_key}"
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(newsapi_url) as response:
+                if response.status != 200:
+                    raise HTTPException(status_code=response.status, detail=f"NewsAPI error: {response.status}")
+                
+                news_data = await response.json()
+                
+                if news_data.get("status") == "error":
+                    raise HTTPException(status_code=400, detail=f"NewsAPI error: {news_data.get('message', 'Unknown error')}")
+                
+                # Create a job with the fetched data
+                global job_id_counter
+                job_id = job_id_counter
+                job_id_counter += 1
+                
+                job_data = {
+                    "id": job_id,
+                    "name": f"NewsAPI Search: {query}",
+                    "description": f"Search for '{query}' in news articles",
+                    "status": "completed",
+                    "created_at": datetime.now(),
+                    "urls": [newsapi_url],
+                    "scraping_rules": {"api_type": "newsapi"},
+                    "settings": {"delay": 1, "useJavaScript": False},
+                    "progress": 100.0,
+                    "pages_scraped": 1,
+                    "results": news_data
+                }
+                
+                jobs_storage[job_id] = job_data
+                
+                return {
+                    "job_id": job_id,
+                    "status": "completed",
+                    "total_results": news_data.get("totalResults", 0),
+                    "articles_found": len(news_data.get("articles", [])),
+                    "message": f"Successfully fetched {len(news_data.get('articles', []))} articles for '{query}'"
+                }
+                
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch news data: {str(e)}")
+
+@router.get("/newsapi/results/{job_id}")
+async def get_newsapi_results(job_id: int):
+    """Get NewsAPI results for a specific job"""
+    if job_id not in jobs_storage:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    
+    job_data = jobs_storage[job_id]
+    results = job_data.get("results", {})
+    articles = results.get("articles", [])
+    
+    return {
+        "job_id": job_id,
+        "total_results": results.get("totalResults", 0),
+        "articles_count": len(articles),
+        "articles": articles[:10],  # Return first 10 articles
+        "status": job_data.get("status", "unknown")
+    }

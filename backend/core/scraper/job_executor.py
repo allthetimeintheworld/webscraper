@@ -197,7 +197,7 @@ class JobExecutor:
                 
                 # Check if this is a JSON API (like NewsAPI)
                 content_type = response.headers.get('content-type', '').lower()
-                if 'application/json' in content_type or url.startswith('https://newsapi.org'):
+                if 'application/json' in content_type or url.startswith('https://newsapi.org') or url.startswith('http://localhost:8001'):
                     return await self._scrape_json_api(response, url, scraping_rules, settings)
                 
                 # Regular HTML scraping
