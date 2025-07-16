@@ -204,6 +204,22 @@ async def get_job_results(job_id: int, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get job results: {str(e)}")
 
+@router.get("/{job_id}/progress")
+async def get_job_progress(job_id: int):
+    """Get the real-time progress from job executor"""
+    status = job_executor.get_job_status(job_id)
+    progress = job_executor.get_job_progress(job_id)
+    
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found in executor")
+    
+    return {
+        "job_id": job_id,
+        "status": status.value,
+        "progress": progress,
+        "is_running": job_id in job_executor.running_jobs
+    }
+
 @router.delete("/{job_id}")
 async def delete_job(job_id: int, db: AsyncSession = Depends(get_db)):
     """Delete a scraping job"""

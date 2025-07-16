@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import time
 import random
+import json
 from dataclasses import dataclass
 from enum import Enum
 
@@ -194,6 +195,12 @@ class JobExecutor:
                         error=f"HTTP {response.status}"
                     )
                 
+                # Check if this is a JSON API (like NewsAPI)
+                content_type = response.headers.get('content-type', '').lower()
+                if 'application/json' in content_type or url.startswith('https://newsapi.org'):
+                    return await self._scrape_json_api(response, url, scraping_rules, settings)
+                
+                # Regular HTML scraping
                 html = await response.text()
                 soup = BeautifulSoup(html, 'html.parser')
                 
@@ -257,6 +264,61 @@ class JobExecutor:
                 error=str(e)
             )
     
+    async def _scrape_json_api(self, response: aiohttp.ClientResponse, url: str, 
+                              scraping_rules: Dict[str, Any], settings: Dict[str, Any]) -> ScrapingResult:
+        """Scrape JSON API responses (like NewsAPI)"""
+        try:
+            json_data = await response.json()
+            
+            # Handle NewsAPI format
+            if 'articles' in json_data:
+                articles = json_data['articles']
+                extracted_data = {
+                    'total_results': json_data.get('totalResults', len(articles)),
+                    'articles': []
+                }
+                
+                for article in articles[:10]:  # Limit to first 10 articles
+                    article_data = {
+                        'title': article.get('title', ''),
+                        'description': article.get('description', ''),
+                        'url': article.get('url', ''),
+                        'source': article.get('source', {}).get('name', ''),
+                        'published_at': article.get('publishedAt', ''),
+                        'author': article.get('author', ''),
+                        'content': article.get('content', '')
+                    }
+                    extracted_data['articles'].append(article_data)
+                
+                print(f"Job: Scraped {len(articles)} articles from NewsAPI")
+                
+                return ScrapingResult(
+                    url=url,
+                    data=extracted_data,
+                    timestamp=time.time(),
+                    success=True,
+                    error=None
+                )
+            
+            # Handle generic JSON
+            else:
+                return ScrapingResult(
+                    url=url,
+                    data=json_data,
+                    timestamp=time.time(),
+                    success=True,
+                    error=None
+                )
+                
+        except Exception as e:
+            return ScrapingResult(
+                url=url,
+                data={},
+                timestamp=time.time(),
+                success=False,
+                error=f"JSON API error: {str(e)}"
+            )
+
     def _extract_field(self, soup: BeautifulSoup, selector: str, attribute: str, base_url: str) -> str:
         """Extract a field from the HTML using CSS selector"""
         try:
