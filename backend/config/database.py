@@ -6,10 +6,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Database configuration
+# Database configuration - using SQLite for development
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql+asyncpg://postgres:password@localhost:5432/webscraper"
+    "sqlite+aiosqlite:///./webscraper.db"
 )
 
 # Create async engine
